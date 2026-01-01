@@ -104,7 +104,7 @@ static RunInfo init_config_and_banner(std::stringstream &dmsg)
     basic_config.word_size_bits = 32;
     basic_config.key_size = 256;
     basic_config.comment = "last round modified";
-    basic_config.total_rounds = 7;
+    basic_config.total_rounds = 7.5;
 
     diff_config.distinguishing_round = 5;
     diff_config.id = {{7, 31}};
@@ -468,10 +468,6 @@ double matchcount(int key_bit, int key_word)
             }
         }
 
-        // 7.5 rounds
-        frward.Half_1_EvenRF(x0);
-        frward.Half_1_EvenRF(dx0);
-
         qr.EVENARX_13(x0);
         qr.EVENARX_13(dx0);
 
@@ -504,8 +500,6 @@ double matchcount(int key_bit, int key_word)
         qr.EVENARX_13(minusstate);
         qr.EVENARX_13(dminusstate);
 
-        bckward.Half_2_EvenRF(minusstate);
-        bckward.Half_2_EvenRF(dminusstate);
 
         if (basic_config.totalRoundsAreFractional())
         {
