@@ -1,4 +1,4 @@
-# sala-repo
+# salsa-repo
 source ocdes of Salsa cipher
 
 ## Running
