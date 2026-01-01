@@ -3,7 +3,7 @@
  *
  *
  * created: 10/05/25
- * updated: 01/12/25
+ * updated: 01/01/26
  *
  * by Hiren
  * Research fellow
@@ -19,7 +19,9 @@
  * Needs: commonutility.hpp, salsa.hpp, pnbutility.hpp
  */
 
-#include "../header/salsa.hpp" // salsa round functions
+#include "header/salsa.hpp" // salsa round functions
+#include <algorithm>
+#include <cctype>
 #include <cmath>               // pow function
 #include <cstring>             // string
 #include <ctime>               // time
@@ -43,8 +45,20 @@ inline bool skip_this(u16 idx, const vector<u16> &skip_bits);
 
 static atomic<u64> progress{0};
 
-// ---------------- main function -----------------
-int main(int argc, char *argv[])
+struct RunInfo
+{
+    u16 key_count = 0;
+    u64 total_work = 0;
+    vector<u16> skip_bits;
+};
+
+struct SearchResults
+{
+    vector<BiasEntry> pnbs;
+    vector<BiasEntry> nonpnbs;
+};
+
+static void parse_cli(int argc, char *argv[], bool &show_segments)
 {
     if (argc >= 2)
     {
@@ -66,40 +80,44 @@ int main(int argc, char *argv[])
 
     if (argc >= 3)
     {
-        std::string flag = argv[2];
-        if (flag == "log" || flag == "LOG" || flag == "1")
-            basic_config.logfile_flag = true;
-        else
-            basic_config.logfile_flag = false;
+        for (int i = 2; i < argc; ++i)
+        {
+            std::string flag = argv[i];
+            std::transform(flag.begin(), flag.end(), flag.begin(),
+                           [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+
+            if (flag == "log" || flag == "1")
+                basic_config.logfile_flag = true;
+            else if (flag == "seg" || flag == "segment" || flag == "segments")
+                show_segments = true;
+        }
     }
+}
 
-    Timer timer;
+static RunInfo init_config_and_banner(std::stringstream &dmsg)
+{
+    RunInfo info;
 
-    stringstream dmsg; //  log buffer
-    string folder = "otheraum";
-
-    dmsg << timer.start_message();
-
-    // ---------------- config -----------------
     basic_config.cipher_name = "salsa";
     basic_config.mode = "PNBsearch"; // input something useful without gap
     basic_config.word_size_bits = 32;
     basic_config.key_size = 256;
-    basic_config.comment = "one round modified";
+    basic_config.comment = "last round modified";
     basic_config.total_rounds = 7;
 
     diff_config.distinguishing_round = 5;
     diff_config.id = {{7, 31}};
     diff_config.mask = {{4, 7}};
 
-    samples_config.samples_per_thread = 1ULL << 17;
+    samples_config.samples_per_thread = 1ULL << 18;
     samples_config.samples_per_batch =
         samples_config.samples_per_thread * samples_config.max_num_threads;
 
-    u16 key_count =
+    info.key_count =
         (basic_config.key_size == 128) ? KEYWORD_COUNT - 4 : KEYWORD_COUNT;
 
-    const u64 total_work = static_cast<u64>(key_count) * WORD_SIZE;
+    info.total_work = static_cast<u64>(info.key_count) * WORD_SIZE;
 
     // optional: if you want total_samples() in showInfo to be "global experiments":
     // samples_config.num_batches = static_cast<std::size_t>(key_count) * WORD_SIZE;
@@ -107,43 +125,48 @@ int main(int argc, char *argv[])
     display::showInfo(&basic_config, &diff_config, &samples_config, dmsg);
     pnbinfo::showPNBConfig(pnb_config, dmsg);
 
-    vector<u16> skip_bits = {
+    info.skip_bits = {
         // example:
         // 2, 5, 48, 74, ...
     };
-    sort(skip_bits.begin(), skip_bits.end());
+    sort(info.skip_bits.begin(), info.skip_bits.end());
 
-    cout << dmsg.str();
-    // ---------------- config end -----------------
+    return info;
+}
 
-    vector<BiasEntry> all_pnbs;
-    vector<BiasEntry> all_nonpnbs;
+static SearchResults run_search(const RunInfo &info)
+{
+    SearchResults results;
+    results.pnbs.reserve(256);
+    results.nonpnbs.reserve(256);
 
     vector<BiasEntry> temp_pnb;
     vector<BiasEntry> temp_non_pnb;
-
-    all_pnbs.reserve(256);
-    all_nonpnbs.reserve(256);
     temp_pnb.reserve(256);
     temp_non_pnb.reserve(256);
 
-    double sum, bias;
+    double sum = 0.0;
+    double bias = 0.0;
 
     vector<std::future<double>> future_results;
     future_results.reserve(samples_config.max_num_threads);
 
-    SpinnerWithETA spinner("Searching PNBs ...", &progress, total_work);
+    progress.store(0, std::memory_order_relaxed);
+
+    #ifdef SPINNER_WITH_ETA_AVAILABLE
+    SpinnerWithETA spinner("Searching PNBs ...", &progress, info.total_work);
     // cout << "\n";
     spinner.start();
+    #endif
 
     // ---------------- key-word / key-bit loop -----------------
-    for (size_t key_word{0}; key_word < key_count; ++key_word)
+    for (size_t key_word{0}; key_word < info.key_count; ++key_word)
     {
         for (size_t key_bit{0}; key_bit < WORD_SIZE; key_bit++)
         {
             u16 global_idx = static_cast<u16>(key_word * WORD_SIZE + key_bit);
 
-            if (skip_this(global_idx, skip_bits))
+            if (skip_this(global_idx, info.skip_bits))
                 continue; // completely ignored and nothing is printed
 
             sum = 0.0;
@@ -175,10 +198,10 @@ int main(int argc, char *argv[])
         }
 
         for (auto &l : temp_pnb)
-            all_pnbs.push_back(l);
+            results.pnbs.push_back(l);
 
         for (auto &l : temp_non_pnb)
-            all_nonpnbs.push_back(l);
+            results.nonpnbs.push_back(l);
 
         temp_pnb.clear();
         temp_non_pnb.clear();
@@ -196,14 +219,29 @@ int main(int argc, char *argv[])
                 v.end());
     };
 
-    sort_by_index(all_pnbs);
-    sort_by_index(all_nonpnbs);
+    sort_by_index(results.pnbs);
+    sort_by_index(results.nonpnbs);
 
-    std::vector<u16> pnbs_sorted_by_index;
-    pnbs_sorted_by_index.reserve(all_pnbs.size());
-    for (auto &e : all_pnbs)
-        pnbs_sorted_by_index.push_back(e.first);
+    #ifdef SPINNER_WITH_ETA_AVAILABLE
+    spinner.stop();
+    #endif
 
+    return results;
+}
+
+static vector<u16> build_sorted_indices(const vector<BiasEntry> &entries)
+{
+    vector<u16> indices;
+    indices.reserve(entries.size());
+    for (auto &e : entries)
+        indices.push_back(e.first);
+    return indices;
+}
+
+static void print_console_summary(const vector<u16> &pnbs_sorted_by_index,
+                                  const vector<u16> &nonpnbs_sorted_by_index,
+                                  bool show_segments)
+{
     cout << "\n";
     // cout << basic_config.col_sep;
     cout << pnbs_sorted_by_index.size() << " PNBs (sorted by index):\n{";
@@ -216,61 +254,105 @@ int main(int argc, char *argv[])
     cout << "}\n";
     cout << basic_config.col_sep;
 
-    // ---------------- save log (if enabled) -----------------
-    if (basic_config.logfile_flag)
+    if (show_segments)
     {
-        // PNB sorted by |bias| (descending)
-        std::vector<u16> pnbs_sorted_by_bias;
-        {
-            std::vector<std::pair<u16, double>> tmp = all_pnbs;
-            std::sort(tmp.begin(), tmp.end(),
-                      [](const auto &a, const auto &b)
-                      {
-                          return std::fabs(a.second) > std::fabs(b.second);
-                      });
-            for (auto &e : tmp)
-                pnbs_sorted_by_bias.push_back(e.first);
-        }
+        pnbinfo::print_per_keyword_pnb_segments(pnbs_sorted_by_index, &basic_config, cout);
+        pnbinfo::print_per_keyword_nonpnb_segments(nonpnbs_sorted_by_index, &basic_config, cout);
+    }
+}
 
-        // non-PNB sorted by index
-        std::vector<u16> nonpnbs_sorted_by_index;
-        nonpnbs_sorted_by_index.reserve(all_nonpnbs.size());
-        for (auto &e : all_nonpnbs)
-            nonpnbs_sorted_by_index.push_back(e.first);
+static void write_log_if_enabled(const vector<BiasEntry> &all_pnbs,
+                                 const vector<BiasEntry> &all_nonpnbs,
+                                 const vector<u16> &pnbs_sorted_by_index,
+                                 const vector<u16> &nonpnbs_sorted_by_index,
+                                 const string &folder,
+                                 Timer &timer,
+                                 stringstream &dmsg)
+{
+    if (!basic_config.logfile_flag)
+        return;
 
-        // per-bit biases (size = 256 always)
-        std::vector<double> bias_per_bit(256, 0.0);
-        for (auto &e : all_pnbs)
-            bias_per_bit[e.first] = e.second;
-        for (auto &e : all_nonpnbs)
-            bias_per_bit[e.first] = e.second;
-
-        pnbinfo::print_full_pnb_report_tail(
-            pnbs_sorted_by_index,
-            pnbs_sorted_by_bias,
-            nonpnbs_sorted_by_index,
-            bias_per_bit,
-            basic_config,
-            dmsg);
-
-        dmsg << timer.end_message();
-
-        // ---------------- save file -----------------
-        std::string filename = makeLogFilename(basic_config, diff_config, &pnb_config, folder);
-        std::ofstream fout(filename);
-        if (fout.is_open())
-        {
-            fout << dmsg.str();
-            fout.close();
-            std::cout << "Log saved to: " << filename << "\n";
-        }
-        else
-        {
-            std::cerr << "ERROR: Could not write log file: " << filename << "\n";
-        }
+    // PNB sorted by |bias| (descending)
+    std::vector<u16> pnbs_sorted_by_bias;
+    {
+        std::vector<std::pair<u16, double>> tmp = all_pnbs;
+        std::sort(tmp.begin(), tmp.end(),
+                  [](const auto &a, const auto &b)
+                  {
+                      return std::fabs(a.second) > std::fabs(b.second);
+                  });
+        for (auto &e : tmp)
+            pnbs_sorted_by_bias.push_back(e.first);
     }
 
-    spinner.stop();
+    // per-bit biases (size = 256 always)
+    std::vector<double> bias_per_bit(256, 0.0);
+    for (auto &e : all_pnbs)
+        bias_per_bit[e.first] = e.second;
+    for (auto &e : all_nonpnbs)
+        bias_per_bit[e.first] = e.second;
+
+    pnbinfo::print_full_pnb_report_tail(
+        pnbs_sorted_by_index,
+        pnbs_sorted_by_bias,
+        nonpnbs_sorted_by_index,
+        bias_per_bit,
+        basic_config,
+        dmsg);
+
+    pnbinfo::print_per_keyword_ps_map(pnbs_sorted_by_index, nonpnbs_sorted_by_index, &basic_config, dmsg);
+
+    dmsg << timer.end_message();
+
+    // ---------------- save file -----------------
+    std::string filename = makeLogFilename(basic_config, diff_config, &pnb_config, folder);
+    std::ofstream fout(filename);
+    if (fout.is_open())
+    {
+        fout << dmsg.str();
+        fout.close();
+        std::cout << "Log saved to: " << filename << "\n";
+    }
+    else
+    {
+        std::cerr << "ERROR: Could not write log file: " << filename << "\n";
+    }
+}
+
+// ---------------- main function -----------------
+int main(int argc, char *argv[])
+{
+    bool show_segments = false;
+    parse_cli(argc, argv, show_segments);
+
+    Timer timer;
+
+    stringstream dmsg; //  log buffer
+    string folder = "otheraum";
+
+    dmsg << timer.start_message();
+
+    // ---------------- config -----------------
+    RunInfo info = init_config_and_banner(dmsg);
+
+    cout << dmsg.str() << std::flush;
+    // ---------------- config end -----------------
+
+    SearchResults results = run_search(info);
+
+    std::vector<u16> pnbs_sorted_by_index = build_sorted_indices(results.pnbs);
+    std::vector<u16> nonpnbs_sorted_by_index = build_sorted_indices(results.nonpnbs);
+
+    print_console_summary(pnbs_sorted_by_index, nonpnbs_sorted_by_index, show_segments);
+
+    write_log_if_enabled(results.pnbs,
+                         results.nonpnbs,
+                         pnbs_sorted_by_index,
+                         nonpnbs_sorted_by_index,
+                         folder,
+                         timer,
+                         dmsg);
+
     cout << timer.end_message();
     return 0;
 }

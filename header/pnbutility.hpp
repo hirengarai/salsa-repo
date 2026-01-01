@@ -14,7 +14,9 @@
  */
 
 #pragma once
-#include "commonutility.hpp"
+#include "common/common.hpp"
+#include <filesystem>
+#include <fstream>
 #include <set>
 
 namespace pnbinfo
@@ -373,32 +375,33 @@ namespace pnbinfo
         return s;
     }
 
-    void print_per_keyword_pnb_segments(const std::vector<u16> &pnbs_sorted_by_index,
-                                        const config::CipherInfo *cipher,
-                                        std::ostream &out)
+    inline void print_per_keyword_segments(const std::vector<u16> &bits_sorted_by_index,
+                                           const config::CipherInfo *cipher,
+                                           const std::string &title,
+                                           std::ostream &out)
     {
         int word_size = cipher->word_size_bits;
-        if (pnbs_sorted_by_index.empty())
+        if (bits_sorted_by_index.empty())
         {
             out << "------------------------------------------------------------------------------\n";
-            out << "Per-keyword PNB segments\n";
+            out << title << "\n";
             out << "(none)\n\n";
             return;
         }
 
-        const std::size_t max_idx = pnbs_sorted_by_index.back();
+        const std::size_t max_idx = bits_sorted_by_index.back();
         const std::size_t num_words = max_idx / word_size + 1;
 
         out << "------------------------------------------------------------------------------\n";
-        out << "Per-keyword PNB segments:\n";
+        out << title << ":\n";
 
         for (std::size_t w{0}; w < num_words; ++w)
         {
             std::vector<int> bits_in_word;
-            bits_in_word.reserve(config.word_size_bits);
+            bits_in_word.reserve(cipher->word_size_bits);
 
             // collect all PNB bit positions in this word
-            for (u16 idx : pnbs_sorted_by_index)
+            for (u16 idx : bits_sorted_by_index)
             {
                 if (idx / word_size == w)
                     bits_in_word.push_back(static_cast<int>(idx % word_size));
@@ -424,6 +427,64 @@ namespace pnbinfo
         }
 
         // out << "\n";
+    }
+
+    inline void print_per_keyword_pnb_segments(const std::vector<u16> &pnbs_sorted_by_index,
+                                               const config::CipherInfo *cipher,
+                                               std::ostream &out)
+    {
+        print_per_keyword_segments(pnbs_sorted_by_index, cipher, "Per-keyword PNB segments", out);
+    }
+
+    inline void print_per_keyword_nonpnb_segments(const std::vector<u16> &nonpnbs_sorted_by_index,
+                                                  const config::CipherInfo *cipher,
+                                                  std::ostream &out)
+    {
+        print_per_keyword_segments(nonpnbs_sorted_by_index, cipher, "Per-keyword non-PNB segments", out);
+    }
+
+    inline void print_per_keyword_ps_map(const std::vector<u16> &pnbs_sorted_by_index,
+                                         const std::vector<u16> &nonpnbs_sorted_by_index,
+                                         const config::CipherInfo *cipher,
+                                         std::ostream &out)
+    {
+        const std::size_t total_bits = cipher->key_size;
+        const std::size_t word_size = cipher->word_size_bits;
+        const std::size_t num_words = (total_bits + word_size - 1) / word_size;
+
+        std::vector<char> flags(total_bits, '.');
+        for (u16 idx : nonpnbs_sorted_by_index)
+        {
+            if (idx < total_bits)
+                flags[idx] = 's';
+        }
+        for (u16 idx : pnbs_sorted_by_index)
+        {
+            if (idx < total_bits)
+                flags[idx] = 'p';
+        }
+
+        out << "------------------------------------------------------------------------------\n";
+        out << "Per-keyword P/S map (bit " << (word_size - 1) << " .. 0):\n";
+
+        for (std::size_t w{0}; w < num_words; ++w)
+        {
+            const std::size_t start = w * word_size;
+            if (start >= total_bits)
+                break;
+            const std::size_t end = std::min(start + word_size - 1, total_bits - 1);
+
+            std::string line;
+            line.reserve(end - start + 1);
+            for (std::size_t b = end + 1; b-- > start;)
+                line.push_back(flags[b]);
+
+            std::ostringstream label;
+            label << "Keyword " << w << " (" << start << "-" << end << ")";
+
+            out << std::left << std::setw(22) << label.str()
+                << " : " << line << "\n";
+        }
     }
 
     // 4. Biases as –log2(|bias|) for all PNBs
@@ -486,7 +547,7 @@ namespace pnbinfo
 
     inline std::string makeLogFilename(const config::CipherInfo &cipher,
                                        const config::DLInfo &diff,
-                                       const PNBdetails *pnb_cfg, std::string &folder)
+                                       const PNBdetails *pnb_cfg, const std::string &folder)
     {
         namespace fs = std::filesystem;
 
