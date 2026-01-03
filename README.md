@@ -19,5 +19,5 @@ Example:
 
 ```sh
 g++ -std=c++20 -O3 altaumstylepnb.cpp
-./a.out 0.35 log segments
+./a.out <neutrality_measure> log segments
 ```
