@@ -3,7 +3,7 @@ source ocdes of Salsa cipher
 
 ## Running
 
-Build and run the PNB search program:
+Clone the github repo, build and run the PNB search program:
 
 ```sh
 g++ -std=c++2c -O3 -flto altaumstylepnb.cpp -o output
