@@ -18,6 +18,6 @@ g++ -std=c++2c -O3 -flto altaumstylepnb.cpp -o output
 Example:
 
 ```sh
-g++ -std=c++20 -O3 -flto altaumstylepnb.cpp
+g++ -std=c++20 -O3 altaumstylepnb.cpp
 ./a.out 0.35 log segments
 ```
